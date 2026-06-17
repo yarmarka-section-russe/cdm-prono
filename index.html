@@ -330,7 +330,12 @@
 
     <!-- ADMIN -->
     <section id="tab-admin" class="tab-pane">
-      <h3 class="section-label" style="margin-top:0">Ajouter un match</h3>
+      <div class="info-strip">
+        <strong>Import automatique</strong> : recupere les 104 matchs officiels (equipes, groupes, dates) depuis le calendrier public de la Coupe du Monde 2026. Les matchs deja presents ne sont pas dupliques. Pratique pour ne rien saisir a la main au depart.
+      </div>
+      <button id="importCalendarBtn" class="btn-primary" style="width:100%; margin-bottom:18px;">📅 Importer le calendrier officiel (104 matchs)</button>
+
+      <h3 class="section-label" style="margin-top:0">Ajouter un match manuellement</h3>
       <form id="addMatchForm" class="admin-form">
         <input list="countryList" id="matchTeam1" placeholder="Équipe 1 (ex: France)" required>
         <input list="countryList" id="matchTeam2" placeholder="Équipe 2 (ex: Sénégal)" required>
@@ -369,8 +374,38 @@ const FLAGS = {
   "Belgique":"🇧🇪","Croatie":"🇭🇷","Pologne":"🇵🇱","Serbie":"🇷🇸","Danemark":"🇩🇰",
   "Ghana":"🇬🇭","Égypte":"🇪🇬","Nouvelle-Zélande":"🇳🇿","Panama":"🇵🇦",
   "Costa Rica":"🇨🇷","Chili":"🇨🇱","Uruguay":"🇺🇾","Venezuela":"🇻🇪","Iran":"🇮🇷",
-  "Arabie Saoudite":"🇸🇦","Ukraine":"🇺🇦"
+  "Arabie Saoudite":"🇸🇦","Ukraine":"🇺🇦","RD Congo":"🇨🇩"
 };
+
+/* Traduction des noms officiels (API calendrier) vers le francais + lien drapeau */
+const TEAM_TRANSLATE = {
+  "Mexico":"Mexique","South Africa":"Afrique du Sud","Korea Republic":"Corée du Sud","Czechia":"Tchéquie",
+  "Canada":"Canada","Bosnia and Herzegovina":"Bosnie-Herzégovine","United States":"États-Unis","Paraguay":"Paraguay",
+  "Haiti":"Haïti","Scotland":"Écosse","Australia":"Australie","Turkiye":"Turquie",
+  "Brazil":"Brésil","Morocco":"Maroc","Qatar":"Qatar","Switzerland":"Suisse",
+  "Cote d'Ivoire":"Côte d'Ivoire","Ecuador":"Équateur","Germany":"Allemagne","Curacao":"Curaçao",
+  "Netherlands":"Pays-Bas","Japan":"Japon","Sweden":"Suède","Tunisia":"Tunisie",
+  "Saudi Arabia":"Arabie Saoudite","Uruguay":"Uruguay","Spain":"Espagne","Cabo Verde":"Cap-Vert",
+  "IR Iran":"Iran","New Zealand":"Nouvelle-Zélande","Belgium":"Belgique","Egypt":"Égypte",
+  "France":"France","Senegal":"Sénégal","Iraq":"Irak","Norway":"Norvège",
+  "Argentina":"Argentine","Algeria":"Algérie","Austria":"Autriche","Jordan":"Jordanie",
+  "Ghana":"Ghana","Panama":"Panama","England":"Angleterre","Croatia":"Croatie",
+  "Portugal":"Portugal","Congo DR":"RD Congo","Uzbekistan":"Ouzbékistan","Colombia":"Colombie"
+};
+function translatePlaceholder(name){
+  if (TEAM_TRANSLATE[name]) return TEAM_TRANSLATE[name];
+  let n = String(name);
+  n = n.replace(/^Group (\w) winners$/, "1er Groupe $1");
+  n = n.replace(/^Group (\w) runners-up$/, "2e Groupe $1");
+  n = n.replace(/^Winner Match (\d+)$/, "Vainqueur match $1");
+  n = n.replace(/^Loser Match (\d+)$/, "Perdant match $1");
+  n = n.replace(/ third place$/, " (3e place)");
+  return n;
+}
+function stageLabel(stage){
+  const map = { "round-of-32":"32e", "round-of-16":"16e", "quarter-finals":"1/4", "semi-finals":"1/2", "third-place":"Match 3e place", "final":"Finale" };
+  return map[stage] || stage;
+}
 function getFlag(name){
   if (FLAGS[name]) return FLAGS[name];
   const key = Object.keys(FLAGS).find(k => k.toLowerCase() === String(name).trim().toLowerCase());
@@ -580,7 +615,7 @@ function renderMatchCard(m, myBet){
   }
 
   card.innerHTML =
-    '<div class="match-top"><span class="match-group-tag">GROUPE ' + escapeHtml(m.group_name || "?") + '</span>' + statusHtml + '</div>' +
+    '<div class="match-top"><span class="match-group-tag">' + (m.group_name && m.group_name.length === 1 ? "GROUPE " + escapeHtml(m.group_name) : escapeHtml(m.group_name || "?").toUpperCase()) + '</span>' + statusHtml + '</div>' +
     '<div class="match-teams">' +
       '<div class="team"><span class="flag">' + flag1 + '</span><span class="name">' + escapeHtml(m.team1) + '</span></div>' +
       '<div class="vs">VS</div>' +
@@ -797,6 +832,7 @@ async function renderAdminMatches(){
             " - " +
             '<input type="number" min="0" max="20" id="admin-s2-' + m.id + '" placeholder="0">' +
             '<button class="btn-small" data-finish="' + m.id + '">Valider</button>' +
+            '<button class="btn-small" data-edit="' + m.id + '" data-t1="' + escapeHtml(m.team1) + '" data-t2="' + escapeHtml(m.team2) + '">✏️</button>' +
             '<button class="btn-small btn-decline" data-delete="' + m.id + '">Suppr.</button>' +
           "</div>";
       }
@@ -804,6 +840,7 @@ async function renderAdminMatches(){
     });
     box.querySelectorAll("[data-finish]").forEach((b) => b.addEventListener("click", () => finishMatch(b.dataset.finish)));
     box.querySelectorAll("[data-delete]").forEach((b) => b.addEventListener("click", () => deleteMatch(b.dataset.delete)));
+    box.querySelectorAll("[data-edit]").forEach((b) => b.addEventListener("click", () => editMatchTeams(b.dataset.edit, b.dataset.t1, b.dataset.t2)));
   } catch(err){ box.innerHTML = '<p class="empty">Erreur.</p>'; console.error(err); }
 }
 
@@ -814,6 +851,54 @@ async function deleteMatch(id){
     toast("Match supprime", "success");
     renderAdminMatches();
   } catch(err){ toast("Erreur", "error"); console.error(err); }
+}
+
+async function editMatchTeams(id, currentTeam1, currentTeam2){
+  const t1 = prompt("Equipe 1 :", currentTeam1);
+  if (t1 === null) return;
+  const t2 = prompt("Equipe 2 :", currentTeam2);
+  if (t2 === null) return;
+  try {
+    await sbPatch("matches?id=eq." + id, { team1: t1, team2: t2, flag1: getFlag(t1), flag2: getFlag(t2) });
+    toast("Match mis a jour", "success");
+    renderAdminMatches();
+  } catch(err){ toast("Erreur", "error"); console.error(err); }
+}
+
+document.getElementById("importCalendarBtn").addEventListener("click", importOfficialCalendar);
+
+async function importOfficialCalendar(){
+  if (!confirm("Importer les 104 matchs officiels depuis le calendrier public ? Les matchs deja existants ne seront pas dupliques.")) return;
+  toast("Import en cours...", "success");
+  try {
+    const res = await fetch("https://www.thestatsapi.com/world-cup/data/fixtures.json");
+    if (!res.ok) throw new Error("fetch failed: " + res.status);
+    const data = await res.json();
+    const existing = await sbGet("matches?select=team1,team2,match_date");
+    const existingKeys = new Set(existing.map((m) => m.team1 + "|" + m.team2 + "|" + new Date(m.match_date).toISOString()));
+    const toInsert = [];
+    data.fixtures.forEach((f) => {
+      const team1 = translatePlaceholder(f.homeTeam);
+      const team2 = translatePlaceholder(f.awayTeam);
+      const match_date = new Date(f.kickoffUtc).toISOString();
+      const key = team1 + "|" + team2 + "|" + match_date;
+      if (existingKeys.has(key)) return;
+      toInsert.push({
+        team1, team2,
+        flag1: getFlag(team1), flag2: getFlag(team2),
+        group_name: f.group || stageLabel(f.stage),
+        match_date,
+        status: "scheduled"
+      });
+    });
+    if (!toInsert.length){ toast("Tous les matchs sont deja importes.", "success"); return; }
+    await sbPost("matches", toInsert);
+    toast(toInsert.length + " matchs importes !", "success");
+    renderAdminMatches();
+  } catch(err){
+    toast("Erreur lors de l import (verifie ta connexion)", "error");
+    console.error(err);
+  }
 }
 
 async function finishMatch(matchId){
