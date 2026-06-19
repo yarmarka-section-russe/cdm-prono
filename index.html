@@ -444,7 +444,10 @@ document.getElementById("loginForm").addEventListener("submit",async e=>{
     if(await sha256(pwd)!==u.password_hash){toast("Mot de passe incorrect","err");return;}
     me={id:u.id,pseudo:u.pseudo,is_admin:u.is_admin,points:u.points};
     save(me); showApp();
-  } catch(e){toast("Erreur connexion","err");console.error(e);}
+  } catch(err){
+    toast("Erreur : "+String(err.message||err).slice(0,140),"err");
+    console.error("LOGIN ERROR:",err);
+  }
 });
 
 document.getElementById("regForm").addEventListener("submit",async e=>{
@@ -458,7 +461,10 @@ document.getElementById("regForm").addEventListener("submit",async e=>{
     const ins=await sbPost("users",[{pseudo,password_hash:await sha256(pwd)}]);
     me={id:ins[0].id,pseudo:ins[0].pseudo,is_admin:false,points:0};
     save(me); showApp(); toast("Bienvenue "+pseudo+" !","ok");
-  } catch(e){toast("Erreur inscription","err");console.error(e);}
+  } catch(err){
+    toast("Erreur : "+String(err.message||err).slice(0,140),"err");
+    console.error("REGISTER ERROR:",err);
+  }
 });
 
 document.getElementById("logoutBtn").addEventListener("click",()=>{clear();location.reload();});
