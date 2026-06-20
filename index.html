@@ -633,6 +633,34 @@ document.querySelectorAll(".seg-btn").forEach(b=>b.addEventListener("click",()=>
   loadRanking(b.dataset.rank);
 }));
 
+/* Recupere les etiquettes de plusieurs joueurs en une fois (non-bloquant) */
+async function fetchLabelsMap(uids){
+  if(!uids.length) return {};
+  try {
+    // 2 requetes simples au lieu d'une jointure PostgREST (plus robuste,
+    // ne depend pas de la detection automatique de la relation par Supabase)
+    const links=await sbGet("user_labels?user_id=in.("+uids.join(",")+")&select=user_id,label_id");
+    if(!links.length) return {};
+    const labelIds=[...new Set(links.map(l=>l.label_id))];
+    const labels=await sbGet("labels?id=in.("+labelIds.join(",")+")&select=*");
+    const byId={}; labels.forEach(l=>{ byId[l.id]=l; });
+    const map={};
+    links.forEach(l=>{
+      if(!byId[l.label_id]) return;
+      if(!map[l.user_id])map[l.user_id]=[];
+      map[l.user_id].push(byId[l.label_id]);
+    });
+    return map;
+  } catch(err){
+    console.warn("Etiquettes non chargees (table labels/user_labels manquante ?) :",err);
+    return {};
+  }
+}
+function labelsHtml(labs){
+  if(!labs||!labs.length) return "";
+  return labs.map(l=>`<span class="lbadge" style="background:${l.color}22;color:${l.color};border:1px solid ${l.color}44">${l.emoji} ${esc(l.name)}</span>`).join("");
+}
+
 async function loadRanking(mode){
   const box=document.getElementById("rankList");
   box.innerHTML='<p class="loading">Chargement...</p>';
@@ -644,31 +672,25 @@ async function loadRanking(mode){
       const fRows=await sbGet("friends?select=*&or=(user_id.eq."+me.id+",friend_id.eq."+me.id+")&status=eq.accepted");
       const ids=[...fRows.map(f=>f.user_id===me.id?f.friend_id:f.user_id),me.id];
       if(ids.length===1){ box.innerHTML='<p class="empty">Ajoute des amis pour ce classement.</p>'; return; }
-      users=await sbGet("users?select=id,pseudo,points&id=in.("+ids.join(",")+"&order=points.desc");
+      users=await sbGet("users?select=id,pseudo,points&id=in.("+ids.join(",")+")&order=points.desc");
     }
-    // Labels de tous les users affichés
-    const uids=users.map(u=>u.id);
-    let userLabels=[];
-    if(uids.length){
-      userLabels=await sbGet("user_labels?user_id=in.("+uids.join(",")+"&select=user_id,labels(id,name,color,emoji)");
-    }
-    const labMap={};
-    userLabels.forEach(ul=>{
-      if(!labMap[ul.user_id])labMap[ul.user_id]=[];
-      if(ul.labels)labMap[ul.user_id].push(ul.labels);
-    });
-
     if(!users.length){box.innerHTML='<p class="empty">Personne ici.</p>';return;}
+
+    const labMap=await fetchLabelsMap(users.map(u=>u.id));
+
     box.innerHTML="";
     users.forEach((u,i)=>{
       const numCls=i===0?"rnum g1":i===1?"rnum g2":i===2?"rnum g3":"rnum";
-      const labs=(labMap[u.id]||[]).map(l=>`<span class="lbadge" style="background:${l.color}22;color:${l.color};border:1px solid ${l.color}44">${l.emoji} ${esc(l.name)}</span>`).join("");
+      const labs=labelsHtml(labMap[u.id]);
       const row=document.createElement("div");
       row.className="rrow"+(u.id===me.id?" me":"");
       row.innerHTML=`<span class="${numCls}">${i+1}</span><div class="rinfo"><div class="rpseudo">${esc(u.pseudo)}</div>${labs?'<div class="rlabels">'+labs+'</div>':""}</div><span class="rpts">${u.points||0} pts</span>`;
       box.appendChild(row);
     });
-  } catch(e){box.innerHTML='<p class="empty">Erreur.</p>';console.error(e);}
+  } catch(err){
+    box.innerHTML='<p class="empty">Erreur : '+esc(String(err.message||err).slice(0,140))+'</p>';
+    console.error("RANKING ERROR:",err);
+  }
 }
 
 /* ================================================
@@ -749,14 +771,19 @@ async function renderFList(){
     if(!rows.length){box.innerHTML='<p class="empty">Pas encore d\'amis. Cherche un pseudo ci-dessus !</p>';return;}
     const ids=rows.map(r=>r.user_id===me.id?r.friend_id:r.user_id).join(",");
     const friends=await sbGet("users?id=in.("+ids+")&select=id,pseudo,points&order=points.desc");
+    const labMap=await fetchLabelsMap(friends.map(f=>f.id));
     box.innerHTML="";
     friends.forEach(f=>{
+      const labs=labelsHtml(labMap[f.id]);
       const row=document.createElement("div");
       row.className="frow";
-      row.innerHTML=`<span>${esc(f.pseudo)}</span><span class="stag-small">${f.points||0} pts</span>`;
+      row.innerHTML=`<div class="rinfo"><div class="rpseudo">${esc(f.pseudo)}</div>${labs?'<div class="rlabels">'+labs+'</div>':""}</div><span class="stag-small">${f.points||0} pts</span>`;
       box.appendChild(row);
     });
-  } catch(e){box.innerHTML='<p class="empty">Erreur.</p>';}
+  } catch(err){
+    box.innerHTML='<p class="empty">Erreur : '+esc(String(err.message||err).slice(0,140))+'</p>';
+    console.error("FRIENDS LIST ERROR:",err);
+  }
 }
 
 /* ================================================
@@ -934,7 +961,10 @@ async function renderLabels(){
       await sbDelete("labels?id=eq."+b.dataset.dellbl);
       toast("Étiquette supprimée","ok"); loadAdmin();
     }));
-  } catch(e){box.innerHTML='<p class="empty">Erreur.</p>';}
+  } catch(err){
+    box.innerHTML='<p class="empty">Erreur : '+esc(String(err.message||err).slice(0,140))+'</p>';
+    console.error("LABELS LIST ERROR:",err);
+  }
 }
 
 document.getElementById("lblCreateBtn").addEventListener("click",async()=>{
@@ -947,7 +977,10 @@ document.getElementById("lblCreateBtn").addEventListener("click",async()=>{
     toast("Étiquette créée !","ok");
     document.getElementById("lblName").value="";
     loadAdmin();
-  } catch(e){toast("Erreur","err");console.error(e);}
+  } catch(err){
+    toast("Erreur : "+String(err.message||err).slice(0,140),"err");
+    console.error("LABEL CREATE ERROR:",err);
+  }
 });
 
 async function loadAssignSelects(){
@@ -958,7 +991,7 @@ async function loadAssignSelects(){
     ]);
     document.getElementById("assignUser").innerHTML=users.map(u=>`<option value="${u.id}">${esc(u.pseudo)}</option>`).join("");
     document.getElementById("assignLabel").innerHTML=labels.map(l=>`<option value="${l.id}">${esc(l.emoji)} ${esc(l.name)}</option>`).join("");
-  } catch(e){}
+  } catch(err){ console.error("ASSIGN SELECTS ERROR:",err); }
 }
 
 document.getElementById("assignBtn").addEventListener("click",async()=>{
